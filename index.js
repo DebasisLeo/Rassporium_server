@@ -88,6 +88,45 @@ app.delete('/carts/:id', (req, res) => {
     });
 });
 
+app.get('/users', (req, res) => {
+    const sqlQuery = 'SELECT * FROM users'; 
+    db.query(sqlQuery, (err, results) => {
+        if (err) {
+            console.error('Error fetching reviews:', err);
+            res.status(500).json({ error: 'Database error' });
+        } else {
+            res.json(results); 
+        }
+    });
+});
+
+
+
+app.post('/users', (req, res) => {
+    const { name, email, photoURL } = req.body;
+
+    if (!name || !email) {
+        return res.status(400).json({ message: 'Name and Email are required' });
+    }
+
+    const sqlQuery = `
+        INSERT INTO users (name, email, photoURL)
+        VALUES (?, ?, ?)
+    `;
+
+    db.query(sqlQuery, [name, email, photoURL], (err, result) => {
+        if (err) {
+            console.error('Error inserting user:', err);
+            return res.status(500).json({ error: 'Database error' });
+        }
+
+        res.json({
+            insertedId: result.insertId,
+            message: "User added successfully"
+        });
+    });
+});
+
 
 app.post('/carts', (req, res) => {
     const { menuId, email, name, image, price } = req.body;
