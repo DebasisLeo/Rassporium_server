@@ -242,110 +242,87 @@ app.get('/menu-ingredients', (req, res) => {
 
 
 app.post('/menu-ingredients', (req, res) => {
-  const { menuName, category, ingredients } = req.body;
+  const { menuId, menuName, category, ingredients } = req.body;
 
-  const allowedCategories = [
-    'salad',
-    'pizza',
-    'soup',
-    'dessert',
-    'drinks',
-    'appetizers',
-    'deep fried',
-    'wings',
-    'biriyani',
-    'vat & dal',
-    'curry vuna',
-    'vat package'
-  ];
-
-  if (!menuName || !category || !Array.isArray(ingredients) || ingredients.length === 0) {
+  if ((!menuId && !menuName) || !Array.isArray(ingredients) || ingredients.length === 0) {
     return res.status(400).json({
-      error: 'Menu name, category, and ingredients are required'
+      error: 'Existing menu item and ingredients are required'
     });
-  }
-
-  if (!allowedCategories.includes(category)) {
-    return res.status(400).json({ error: 'Invalid category' });
   }
 
   db.beginTransaction((txErr) => {
     if (txErr) return res.status(500).json({ error: txErr.message });
 
-    const insertMenuSql = `
-      INSERT INTO menu (name, category, price, recipe, image)
-      VALUES (?, ?, ?, ?, ?)
-    `;
+    const findMenuSql = menuId
+      ? 'SELECT id, name, category FROM menu WHERE id = ? LIMIT 1'
+      : 'SELECT id, name, category FROM menu WHERE name = ? AND category = ? LIMIT 1';
 
-    db.query(
-      insertMenuSql,
-      [menuName, category, 0, '', ''],
-      (menuErr, menuResult) => {
-        if (menuErr) {
-          return db.rollback(() => {
-            res.status(500).json({ error: menuErr.message });
-          });
+    const findMenuParams = menuId ? [menuId] : [menuName, category];
+
+    db.query(findMenuSql, findMenuParams, (menuErr, menuRows) => {
+      if (menuErr) {
+        return db.rollback(() => res.status(500).json({ error: menuErr.message }));
+      }
+
+      if (!menuRows.length) {
+        return db.rollback(() => res.status(404).json({ error: 'Menu item not found' }));
+      }
+
+      const fixedMenu = menuRows[0];
+      const values = ingredients.map((item) => [
+        fixedMenu.id,
+        item.ingredientId,
+        item.quantityRequired
+      ]);
+
+      const insertIngredientsSql = `
+        INSERT INTO menu_ingredients
+          (menu_id, ingredient_id, quantity_required)
+        VALUES ?
+        ON DUPLICATE KEY UPDATE
+          quantity_required = VALUES(quantity_required)
+      `;
+
+      db.query(insertIngredientsSql, [values], (ingredientErr) => {
+        if (ingredientErr) {
+          return db.rollback(() => res.status(500).json({ error: ingredientErr.message }));
         }
 
-        const menuId = menuResult.insertId;
-
-        const values = ingredients.map((item) => [
-          menuId,
-          item.ingredientId,
-          item.quantityRequired
-        ]);
-
-        const insertIngredientsSql = `
-          INSERT INTO menu_ingredients 
-          (menu_id, ingredient_id, quantity_required)
-          VALUES ?
-        `;
-
-        db.query(insertIngredientsSql, [values], (ingredientErr) => {
-          if (ingredientErr) {
-            return db.rollback(() => {
-              res.status(500).json({ error: ingredientErr.message });
-            });
+        db.commit((commitErr) => {
+          if (commitErr) {
+            return db.rollback(() => res.status(500).json({ error: commitErr.message }));
           }
 
-          db.commit((commitErr) => {
-            if (commitErr) {
-              return db.rollback(() => {
-                res.status(500).json({ error: commitErr.message });
-              });
+          const selectSql = `
+            SELECT 
+              mi.id,
+              mi.menu_id,
+              m.name AS menu_name,
+              m.category,
+              mi.ingredient_id,
+              ing.name AS ingredient_name,
+              ing.unit,
+              mi.quantity_required,
+              inv.stock,
+              inv.min_stock
+            FROM menu_ingredients mi
+            JOIN menu m ON mi.menu_id = m.id
+            JOIN ingredients ing ON mi.ingredient_id = ing.id
+            JOIN inventory inv ON ing.id = inv.ingredient_id
+            WHERE mi.menu_id = ?
+            ORDER BY ing.name
+          `;
+
+          db.query(selectSql, [fixedMenu.id], (selectErr, rows) => {
+            if (selectErr) {
+              return res.status(500).json({ error: selectErr.message });
             }
 
-            const selectSql = `
-              SELECT 
-                mi.id,
-                mi.menu_id,
-                m.name AS menu_name,
-                m.category,
-                mi.ingredient_id,
-                ing.name AS ingredient_name,
-                ing.unit,
-                mi.quantity_required,
-                inv.stock,
-                inv.min_stock
-              FROM menu_ingredients mi
-              JOIN menu m ON mi.menu_id = m.id
-              JOIN ingredients ing ON mi.ingredient_id = ing.id
-              JOIN inventory inv ON ing.id = inv.ingredient_id
-              WHERE mi.menu_id = ?
-              ORDER BY ing.name
-            `;
-
-            db.query(selectSql, [menuId], (selectErr, rows) => {
-              if (selectErr) {
-                return res.status(500).json({ error: selectErr.message });
-              }
-
-              res.status(201).json(rows);
-            });
+            res.status(201).json(rows);
           });
         });
-      }
-    );
+      });
+    });
   });
 });
 
