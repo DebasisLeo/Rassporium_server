@@ -3,6 +3,9 @@ const express = require('express');
 const mysql = require('mysql2');
 const app = express();
 const cors = require('cors');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+
 const port = process.env.PORT || 8000;
 
 app.use(cors());
@@ -142,17 +145,201 @@ app.patch('/menu/:id', (req, res) => {
     });
 });
 
-app.get('/reviews', (req, res) => {
-    const sqlQuery = 'SELECT * FROM reviews'; 
+
+app.post("/create-payment-intent", async (req, res) => {
+    try {
+      const { price } = req.body;
+  
+      const amount = Math.round(price * 100);
+  
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount,
+        currency: "usd",
+        payment_method_types: ["card"],
+      });
+  
+      res.send({
+        clientSecret: paymentIntent.client_secret,
+      });
+  
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+
+  app.post("/payments", (req, res) => {
+    const { email, price, transactionId, status, items } = req.body;
+  
+    if (!email || !transactionId) {
+      return res.status(400).json({ message: "Missing fields" });
+    }
+  
+    const sql = `
+      INSERT INTO payments (email, price, transactionId, status, items)
+      VALUES (?, ?, ?, ?, ?)
+    `;
+  
+    db.query(
+      sql,
+      [
+        email,
+        price,
+        transactionId,
+        status || "success",
+        JSON.stringify(items || [])
+      ],
+      (err, result) => {
+        if (err) {
+          return res.status(500).json({ error: err.message });
+        }
+  
+        // clear cart
+        db.query(`DELETE FROM carts WHERE email = ?`, [email]);
+  
+        // 🔥 IMPORTANT: return simple response
+        res.json({
+          insertedId: result.insertId
+        });
+      }
+    );
+  });
+
+  app.get("/payments/:email", (req, res) => {
+    const email = req.params.email;
+  
+    const sql = `
+      SELECT * FROM payments
+      WHERE email = ?
+      ORDER BY id DESC
+    `;
+  
+    db.query(sql, [email], (err, results) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+  
+      const data = results.map(row => {
+        let items = [];
+  
+        try {
+          if (!row.items) {
+            items = [];
+          } 
+          else if (typeof row.items === "string") {
+            items = JSON.parse(row.items);
+          } 
+          else {
+            items = row.items; // already parsed JSON (rare case)
+          }
+        } catch (e) {
+          items = [];
+        }
+  
+        return {
+          ...row,
+          items
+        };
+      });
+  
+      res.json(data);
+    });
+  });
+
+  app.get("/order-stats", (req, res) => {
+    const sql = `
+      SELECT 
+        m.category AS category,
+        COUNT(m.id) AS quantity,
+        SUM(m.price) AS revenue
+      FROM payments p,
+      JSON_TABLE(
+        COALESCE(p.items, '[]'),
+        '$[*]' COLUMNS (
+          menu_id INT PATH '$.id'
+        )
+      ) AS jt
+      JOIN menu m ON m.id = jt.menu_id
+      GROUP BY m.category
+      ORDER BY revenue DESC
+    `;
+  
+    db.query(sql, (err, result) => {
+      if (err) {
+        console.error("Order stats error:", err);
+        return res.status(500).json({ error: err.message });
+      }
+  
+      res.json(result);
+    });
+  });
+
+  app.get("/admin-stats", (req, res) => {
+    const sql = `
+      SELECT 
+        (SELECT COUNT(*) FROM users) AS users,
+        (SELECT COUNT(*) FROM menu) AS menuItems,
+        (SELECT COUNT(*) FROM payments) AS orders,
+        (SELECT COALESCE(SUM(price), 0) FROM payments) AS revenue
+    `;
+  
+    db.query(sql, (err, result) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+  
+      res.json(result[0]);
+    });
+  });
+
+  
+  app.listen(port, () => {
+    console.log(` Server running on ${port}`);
+  });
+
+  app.get('/reviews', (req, res) => {
+    const sqlQuery = `
+        SELECT * FROM reviews
+        ORDER BY id DESC
+    `;
+
     db.query(sqlQuery, (err, results) => {
         if (err) {
             console.error('Error fetching reviews:', err);
-            res.status(500).json({ error: 'Database error' });
-        } else {
-            res.json(results); 
+            return res.status(500).json({ error: 'Database error' });
         }
+
+        res.json(results);
     });
 });
+
+app.post('/reviews', (req, res) => {
+    const { name, details, rating } = req.body;
+  
+    // validation
+    if (!name || !details || !rating) {
+      return res.status(400).json({ message: "All fields required" });
+    }
+  
+    const sql = `
+      INSERT INTO reviews (name, details, rating)
+      VALUES (?, ?, ?)
+    `;
+  
+    db.query(sql, [name, details, rating], (err, result) => {
+      if (err) {
+        console.error("Review insert error:", err);
+        return res.status(500).json({ error: err.message });
+      }
+  
+      res.json({
+        insertedId: result.insertId,
+        message: "Review added successfully"
+      });
+    });
+  });
+
+
 app.get('/carts', (req, res) => {
     const userEmail = req.query.email;
 
@@ -237,7 +424,7 @@ app.post('/users', (req, res) => {
     db.query(sqlQuery, [name, email, photoURL, defaultRole], (err, result) => {
         if (err) {
             console.error('Error inserting user:', err);
-            return res.status(500).json({ error: err.message }); // better debug
+            return res.status(500).json({ error: err.message }); 
         }
 
         res.json({
@@ -247,6 +434,24 @@ app.post('/users', (req, res) => {
     });
 });
 
+app.get("/users/:email", (req, res) => {
+    const email = req.params.email;
+
+    const sql = "SELECT * FROM users WHERE email = ? LIMIT 1";
+
+    db.query(sql, [email], (err, results) => {
+        if (err) {
+            console.error("Error fetching user:", err);
+            return res.status(500).json({ error: "Database error" });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        res.json(results[0]);
+    });
+});
 
 
 app.post('/carts', (req, res) => {
