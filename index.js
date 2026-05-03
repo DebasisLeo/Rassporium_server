@@ -19,6 +19,227 @@ const db = mysql.createConnection({
     database: process.env.DB_NAME
 });
 
+//payments
+app.get("/payments", (req, res) => {
+  const sql = `
+    SELECT * FROM payments
+    WHERE status = 'success'
+    ORDER BY created_at DESC
+  `;
+
+  db.query(sql, (err, payments) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(payments);
+  });
+});
+
+
+//manage suppliers
+app.get('/suppliers', (req, res) => {
+  const sql = `
+    SELECT 
+      s.id,
+      s.name,
+      s.email,
+      s.phone,
+      s.lead_time,
+      ing.id AS ingredient_id,
+      ing.name AS ingredient_name,
+      ing.unit
+    FROM suppliers s
+    LEFT JOIN supplier_ingredients si ON s.id = si.supplier_id
+    LEFT JOIN ingredients ing ON si.ingredient_id = ing.id
+    ORDER BY s.name, ing.name
+  `;
+
+  db.query(sql, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+
+    const suppliers = Object.values(
+      rows.reduce((acc, row) => {
+        if (!acc[row.id]) {
+          acc[row.id] = {
+            id: row.id,
+            name: row.name,
+            email: row.email,
+            phone: row.phone,
+            lead_time: row.lead_time,
+            ingredients: []
+          };
+        }
+
+        if (row.ingredient_id) {
+          acc[row.id].ingredients.push({
+            id: row.ingredient_id,
+            name: row.ingredient_name,
+            unit: row.unit
+          });
+        }
+
+        return acc;
+      }, {})
+    );
+
+    res.json(suppliers);
+  });
+});
+
+app.post('/suppliers', (req, res) => {
+  const { name, email, phone, lead_time } = req.body;
+
+  if (!name) {
+    return res.status(400).json({ error: "Supplier name is required" });
+  }
+
+  const sql = `
+    INSERT INTO suppliers (name, email, phone, lead_time)
+    VALUES (?, ?, ?, ?)
+  `;
+
+  db.query(sql, [name, email || null, phone || null, lead_time || null], (err, result) => {
+    if (err) return res.status(500).json({ error: err.message });
+
+    res.json({
+      insertedId: result.insertId,
+      id: result.insertId,
+      name,
+      email,
+      phone,
+      lead_time
+    });
+  });
+});
+
+app.post('/suppliers/:id/ingredients', (req, res) => {
+  const supplierId = req.params.id;
+  const { ingredient_id } = req.body;
+
+  if (!ingredient_id) {
+    return res.status(400).json({ error: "ingredient_id is required" });
+  }
+
+  const sql = `
+    INSERT IGNORE INTO supplier_ingredients (supplier_id, ingredient_id)
+    VALUES (?, ?)
+  `;
+
+  db.query(sql, [supplierId, ingredient_id], (err, result) => {
+    if (err) return res.status(500).json({ error: err.message });
+
+    res.json({
+      insertedId: result.insertId,
+      message: "Supplier ingredient linked"
+    });
+  });
+});
+
+
+//manage inventory ingredients
+app.get('/ingredients', (req, res) => {
+  const sql = `
+    SELECT 
+      ing.id,
+      ing.name,
+      ing.unit,
+      COALESCE(inv.stock, 0) AS stock,
+      COALESCE(inv.min_stock, 5) AS min_stock
+    FROM ingredients ing
+    LEFT JOIN inventory inv ON ing.id = inv.ingredient_id
+    ORDER BY ing.name
+  `;
+
+  db.query(sql, (err, result) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(result);
+  });
+});
+
+app.post('/ingredients', (req, res) => {
+  const { name, unit, stock = 0, min_stock = 5 } = req.body;
+
+  if (!name || !unit) {
+    return res.status(400).json({ error: "Name and unit are required" });
+  }
+
+  db.query(
+    `INSERT INTO ingredients (name, unit) VALUES (?, ?)`,
+    [name, unit],
+    (err, result) => {
+      if (err) return res.status(500).json({ error: err.message });
+
+      const ingredientId = result.insertId;
+
+      db.query(
+        `INSERT INTO inventory (ingredient_id, stock, min_stock) VALUES (?, ?, ?)`,
+        [ingredientId, stock, min_stock],
+        (err2) => {
+          if (err2) return res.status(500).json({ error: err2.message });
+
+          res.json({
+            insertedId: ingredientId,
+            message: "Ingredient added successfully"
+          });
+        }
+      );
+    }
+  );
+});
+app.patch('/ingredients/:id', (req, res) => {
+  const id = req.params.id;
+  const { stock } = req.body;
+
+  if (stock == null || stock < 0) {
+    return res.status(400).json({ error: "Invalid stock" });
+  }
+
+  db.query(
+    `UPDATE inventory SET stock = ? WHERE ingredient_id = ?`,
+    [stock, id],
+    (err, result) => {
+      if (err) return res.status(500).json({ error: err.message });
+
+      res.json({ modifiedCount: result.affectedRows });
+    }
+  );
+});
+
+app.delete('/ingredients/:id', (req, res) => {
+  const id = req.params.id;
+
+  db.query(`DELETE FROM ingredients WHERE id = ?`, [id], (err, result) => {
+    if (err) return res.status(500).json({ error: err.message });
+
+    res.json({ deletedCount: result.affectedRows });
+  });
+});
+
+
+app.get('/menu-ingredients', (req, res) => {
+  const sql = `
+    SELECT 
+      mi.id,
+      mi.menu_id,
+      m.name AS menu_name,
+      m.category,
+      mi.ingredient_id,
+      ing.name AS ingredient_name,
+      ing.unit,
+      mi.quantity_required,
+      inv.stock,
+      inv.min_stock
+    FROM menu_ingredients mi
+    JOIN menu m ON mi.menu_id = m.id
+    JOIN ingredients ing ON mi.ingredient_id = ing.id
+    JOIN inventory inv ON ing.id = inv.ingredient_id
+    ORDER BY m.name, ing.name
+  `;
+
+  db.query(sql, (err, result) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(result);
+  });
+});
+
 
 db.connect((err) => {
     if (err) {
