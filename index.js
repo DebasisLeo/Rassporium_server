@@ -32,7 +32,6 @@ app.get('/', (req, res) => {
     res.send("boss is sitting")
 });
 
-
 app.get('/menu', (req, res) => {
     const sqlQuery = 'SELECT * FROM menu'; 
     db.query(sqlQuery, (err, results) => {
