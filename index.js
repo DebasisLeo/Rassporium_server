@@ -12,11 +12,28 @@ app.use(cors());
 app.use(express.json());
 
 
+const fs = require('fs');
+
 const db = mysql.createConnection({
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASS,
-    database: process.env.DB_NAME
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASS,
+  database: process.env.DB_NAME,
+  port: process.env.DB_PORT,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
+
+app.get('/db-test', (req, res) => {
+  db.query('SELECT 1 + 1 AS result', (err, result) => {
+      if (err) {
+          console.log("DB TEST ERROR:", err);
+          return res.json({ ok: false, err });
+      }
+
+      res.json({ ok: true, result });
+  });
 });
 
 //payments
@@ -340,15 +357,21 @@ app.get('/', (req, res) => {
 });
 
 app.get('/menu', (req, res) => {
-    const sqlQuery = 'SELECT * FROM menu'; 
-    db.query(sqlQuery, (err, results) => {
-        if (err) {
-            console.error('Error fetching menu:', err);
-            res.status(500).json({ error: 'Database error' });
-        } else {
-            res.json(results); 
-        }
-    });
+  const sqlQuery = 'SELECT * FROM menu';
+
+  db.query(sqlQuery, (err, results) => {
+      if (err) {
+          console.error("🔥 MENU ERROR:", err);
+
+          return res.status(500).json({
+              error: err.message,
+              code: err.code,
+              errno: err.errno
+          });
+      }
+
+      res.json(results);
+  });
 });
 
 app.get('/menu/:id', (req, res) => {
@@ -451,6 +474,7 @@ app.patch('/menu/:id', (req, res) => {
     });
 });
 
+//payment
 
 app.post("/create-payment-intent", async (req, res) => {
     try {
@@ -599,10 +623,7 @@ app.post("/create-payment-intent", async (req, res) => {
   });
 
   
-  app.listen(port, () => {
-    console.log(` Server running on ${port}`);
-  });
-
+ 
   app.get('/reviews', (req, res) => {
     const sqlQuery = `
         SELECT * FROM reviews
