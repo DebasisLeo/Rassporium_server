@@ -357,6 +357,8 @@ app.get('/', (req, res) => {
 });
 
 app.get('/menu', (req, res) => {
+  console.log("🔥 NEW CODE HIT");
+
   const sqlQuery = 'SELECT * FROM menu';
 
   db.query(sqlQuery, (err, results) => {
@@ -365,8 +367,7 @@ app.get('/menu', (req, res) => {
 
           return res.status(500).json({
               error: err.message,
-              code: err.code,
-              errno: err.errno
+              code: err.code
           });
       }
 
